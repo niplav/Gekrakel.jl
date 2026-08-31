@@ -89,6 +89,84 @@ Two consequences, and the package hands you the tool for both:
   of this applies. Once anything breaks the chain — a branch through `over`, a
   correlated operand, `sin` — the mean quietly becomes an estimate.
 
+## Stochastic dominance
+
+The thing a language can't do: hand a function to the library and ask which
+inputs give outputs that dominate.
+
+The orders live in their own package,
+[StochasticOrders.jl](../StochasticOrders.jl), because they need nothing
+but two index-aligned sample vectors — they work equally well on an MCMC chain
+or a CSV column. Gekrakel adds the three parts that do need a `Node`:
+unwrapping, the integrability guard (detectable only from a closed form), and
+`certify`.
+
+```julia
+fosd(x, y)          # does x first-order dominate y (weakly)?
+undominated(xs)     # indices nothing dominates — the maximal antichain
+dominating(xs)      # the greatest element, or `nothing`
+margin(x, y)        # why it failed, and by how much
+```
+
+For equal-N empirical measures this needs no grid and no KDE. `F̂_X ≤ F̂_Y`
+pointwise iff the quantile functions reverse, and both are step functions with
+jumps at the same `i/N`, so the whole thing collapses to `sort(xs) .>= sort(ys)`
+— O(N log N), and exact on the empirical measures. Everything else is the same
+vector under a different reduction: `mean(abs.(d))` is Wasserstein-1,
+`max.(sort, sort)` is the lattice join (`⊔`), `cumsum` gives second-order
+dominance.
+
+**Three orders, and they answer different questions.**
+
+| | |
+|---|---|
+| `fosd` | better for every increasing utility. Marginal. |
+| `sosd` | better for every increasing *concave* utility — every risk-averse preference |
+| `icx` | the risk-seeking counterpart |
+| `statewise`, `pgeq` | better in every *world*, using the coupling |
+
+`statewise` is the one this library can ask and Squiggle cannot. `fosd`
+compares marginals, so sorting throws the index alignment away; `statewise`
+keeps it, and the index *is* the model's joint structure — same draw of every
+shared input. Prefer `pgeq`, which returns `P(x ≥ y)`: a probability-one claim
+isn't estimable from N draws, so a true 0.9995 reads as `false` and tells you
+nothing.
+
+The coupling matters more than it looks. Shared leaves make the two sorted
+vectors positively dependent, so `x = y + δ` passes at *one* particle; built
+from independent leaves with the same marginals it fails unless δ clears the
+noise in the extreme order statistics. Which is why `sweep` insists you build
+the leaves **once, outside** the function.
+
+**Expect nothing to dominate.** Dominance requires the extreme order statistics
+to be ordered, and between two location-scale distributions it requires *equal
+scale* — it is essentially a same-shape-shifted relation. Any two options
+differing in spread are incomparable after two comparisons, so in a model whose
+point is that options differ in risk, the frontier is nearly everything. That
+is information. `undominated` is never empty and needs no sentinel: "nothing
+dominates" and "everything is undominated" are the same sentence.
+
+So the deliverables that actually discriminate are `margin`, `regret`, and
+`robust` — the last sweeping risk aversion over a CARA family and keeping what
+survives every setting.
+
+`certify` decides from closed forms where it can, and returns `nothing` rather
+than guessing. A `true` there is a proof, not an estimate.
+
+## Functions of two variables
+
+```julia
+sweep(f, (0.5, 20), (5, 90); n=(16,16), stat=median, xlab="hr/day", ylab="days")
+```
+
+A heatmap of one summary per cell with the undominated cells outlined — two
+input dimensions plus a distribution is four-ish dimensions and no single glyph
+survives that. Diverging blue↔red on a neutral grey midpoint, symmetric about
+zero (a diverging scale has to be, or the midpoint stops meaning "nothing"), the
+red arm derived by rotating the blue steps in OKLCH so the arms match in
+lightness. Both themes are selected rather than flipped, and the poles clear
+CVD separation in both.
+
 ## Precedence gotcha
 
 `…` sits in Julia's precedence group 10, **looser** than `+` (11) and `*` (12):
@@ -186,6 +264,14 @@ cell, which fights the `x = ...; x = truncate(x, ...)` style. Use `let` blocks.
 | `gek(x)` | wrap a distribution, particles, or a sample vector |
 | `exact(x)` | is a closed form still available? |
 | `spark(x)` | the unicode histogram |
+| `fosd`, `sosd`, `icx`, `statewise`, `pgeq` | the dominance orders |
+| `relate(x,y)`, `margin(x,y)` | the verdict, and why it failed |
+| `x ⊔ y`, `x ⊓ y`, `envelope(xs)` | lattice join, meet, and the join of a family |
+| `undominated`, `dominating`, `domlevels`, `hasse`, `domgraph` | the order on a family |
+| `margins`, `regret`, `robust` | the rankings for when nothing dominates |
+| `certify(x,y)` | decide from closed forms; `nothing` if undecided |
+| `wass(x,y)` | Wasserstein-1 |
+| `sweep(f, xr, yr)` | ℝ²→distribution heatmap with the frontier outlined |
 | `svgdens(x)` | inline SVG density; what `MIME"text/html"` shows |
 | `distfn(f, lo, hi; n, mass, xlab)` | plot ℝ → distribution, as quantile bands |
 | `nsamp()`, `setnsamp!(n)` | global particle count, default 2000 |
@@ -196,11 +282,6 @@ Poissons, equal-scale Gammas and equal-`p` Binomials, `exp` of a normal, `log`
 of a lognormal, and mixtures of independent exact components. Everything else
 falls through to 2000 particles, which is not a fallback so much as the normal
 case.
-
-## Not implemented
-
-No PointSet/KDE representation, no Squiggle source parser (deliberately — the
-language boundary is the thing being removed), no `@name`/`@doc` tags.
 
 ## Name collisions
 
